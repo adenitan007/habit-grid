@@ -150,6 +150,11 @@ svg text{fill:var(--muted);font-family:var(--f-mono);font-size:10px}
 .sechead{display:flex;justify-content:space-between;align-items:baseline;gap:6px 12px;flex-wrap:wrap;margin-bottom:12px}
 .sechead h2{font-size:18px}
 
+/* sync */
+.syncbox{margin-top:18px;padding-top:16px;border-top:1px solid var(--line)}
+.syncbox h3{font-size:15px}
+.syncbox .manage input{flex:1 1 220px;min-width:0;font-family:var(--f-mono);text-transform:uppercase;letter-spacing:.05em}
+.code{background:var(--panel-2);border:1px solid var(--w1);border-radius:8px;padding:8px 12px;font-size:15px;letter-spacing:.08em;user-select:all;word-break:break-all}
 /* hover only where there is a real pointer, so taps on phones don't leave "stuck" highlights */
 @media (hover:hover){
   .btn:hover{border-color:var(--w2)}
@@ -279,6 +284,26 @@ svg text{fill:var(--muted);font-family:var(--f-mono);font-size:10px}
       <button class="btn primary" type="submit">Add habit</button>
     </form>
     <div class="hlist" id="chips"></div>
+    <div id="sync" class="syncbox" hidden>
+      <div class="sechead" style="margin-bottom:6px"><h3>Sync across devices</h3><span class="status" id="syncStatus">Off</span></div>
+      <div id="syncOff">
+        <p class="status" style="margin:0 0 10px">Turn on sync to back up to the cloud and use the same habits and ticks on your other phone or laptop.</p>
+        <div class="manage">
+          <button class="btn primary" id="syncStart" type="button">Turn on sync</button>
+          <input id="syncCodeIn" placeholder="Or enter a code from another device" aria-label="Sync code" autocomplete="off" autocapitalize="characters" spellcheck="false">
+          <button class="btn" id="syncJoin" type="button">Connect</button>
+        </div>
+      </div>
+      <div id="syncOn" hidden>
+        <p class="status" style="margin:0 0 8px">Your sync code. Enter it on another device to share this data there. Keep it private; anyone with it can see your tracker.</p>
+        <div class="manage">
+          <code class="code num" id="syncCode"></code>
+          <button class="btn" id="syncCopy" type="button">Copy</button>
+          <button class="btn" id="syncNow" type="button">Sync now</button>
+          <button class="btn" id="syncStop" type="button">Turn off here</button>
+        </div>
+      </div>
+    </div>
     <div id="backup" class="manage" style="margin-top:16px" hidden>
       <span class="status" style="flex:1;min-width:200px">Your data lives on this phone. Export a backup now and then.</span>
       <button class="btn" id="exportBtn" type="button">Export backup</button>
@@ -329,13 +354,13 @@ function saveMonth(){
     const body=JSON.parse(JSON.stringify(month)); const k=key(cur);
     if(db){
       writing=writing.then(()=>db.doc("months/"+k).set(body)).then(()=>status("Saved")).catch(e=>status(e&&e.code==="invalid_argument"?"Read-only view":"Couldn't save — try again"));
-    }else{const s=lsRead();s.months=s.months||{};s.months[k]=body;lsWrite(s);status("Saved on this device")}
+    }else{body.at=Date.now();const s=lsRead();s.months=s.months||{};s.months[k]=body;lsWrite(s);status("Saved on this device");window.__queueSync&&window.__queueSync()}
   },400);
 }
 function saveHabits(){
   const body={list:habits};
   if(db){db.doc("config/habits").set(body).then(()=>status("Saved")).catch(()=>status("Couldn't save habits"))}
-  else{const s=lsRead();s.habits=habits;lsWrite(s)}
+  else{const s=lsRead();s.habits=habits;s.habitsAt=Date.now();lsWrite(s);window.__queueSync&&window.__queueSync()}
 }
 function loadMonth(){
   scrollPending=true;
@@ -558,6 +583,55 @@ el("prev").onclick=()=>{cur=new Date(cur.getFullYear(),cur.getMonth()-1,1);loadM
 el("next").onclick=()=>{cur=new Date(cur.getFullYear(),cur.getMonth()+1,1);loadMonth()};
 el("now").onclick=()=>{const t=new Date();cur=new Date(t.getFullYear(),t.getMonth(),1);loadMonth()};
 
+/* ---------- cloud sync (installed app) ---------- */
+function setupSync(){
+  const API="https://mmmafxpyaldwznsnvtaw.supabase.co/rest/v1/rpc/", KEY="sb_publishable_wDyTikd8fo4xeXkF0Ki_xw_rteeso32", SK="habitgrid:sync";
+  const box=el("sync"); box.hidden=false;
+  let code=null, busy=false, again=false, timer=null;
+  try{code=localStorage.getItem(SK)}catch(_){}
+  const sst=t=>el("syncStatus").textContent=t;
+  const norm=v=>v.toUpperCase().replace(/[^A-Z0-9]/g,"");
+  const pretty=c=>c.match(/.{1,5}/g).join("-");
+  function makeCode(){const A="ABCDEFGHJKLMNPQRSTUVWXYZ23456789",b=new Uint8Array(25);crypto.getRandomValues(b);return [...b].map(x=>A[x%A.length]).join("")}
+  async function rpc(fn,body){
+    const r=await fetch(API+fn,{method:"POST",headers:{"apikey":KEY,"Content-Type":"application/json"},body:JSON.stringify(body)});
+    if(!r.ok)throw new Error("HTTP "+r.status); return r.json();
+  }
+  function merge(a,b){ // newest wins per month, and for the habit list
+    const out={...a,months:{...(a.months||{})}};
+    if((!Array.isArray(a.habits)&&Array.isArray(b.habits))||(b.habitsAt||0)>(a.habitsAt||0)){out.habits=b.habits;out.habitsAt=b.habitsAt}
+    for(const [k,m] of Object.entries(b.months||{})){const mine=out.months[k];if(!mine||(m.at||0)>(mine.at||0))out.months[k]=m}
+    return out;
+  }
+  async function sync(){
+    if(!code)return; if(busy){again=true;return} busy=true; sst("Syncing…");
+    try{
+      const res=await rpc("hg_pull",{p_key:code});
+      const local=lsRead(); const merged=res&&res.data?merge(local,res.data):local;
+      const changed=JSON.stringify(merged)!==JSON.stringify(local);
+      if(changed){lsWrite(merged);habits=merged.habits||[];loadMonth()}
+      if(!res||JSON.stringify(res.data)!==JSON.stringify(merged)) await rpc("hg_push",{p_key:code,p_data:merged});
+      sst("Synced "+new Date().toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"}));
+    }catch(e){sst(navigator.onLine?"Couldn't sync, will retry":"Offline, will sync when back online")}
+    busy=false; if(again){again=false;sync()}
+  }
+  window.__queueSync=()=>{if(!code)return;clearTimeout(timer);timer=setTimeout(sync,1500)};
+  function show(){
+    el("syncOff").hidden=!!code; el("syncOn").hidden=!code;
+    if(code)el("syncCode").textContent=pretty(code); else sst("Off");
+  }
+  function start(c){code=c;try{localStorage.setItem(SK,c)}catch(_){}show();sync()}
+  el("syncStart").onclick=()=>start(makeCode());
+  el("syncJoin").onclick=()=>{const c=norm(el("syncCodeIn").value);if(c.length<20){sst("That code looks too short");return}el("syncCodeIn").value="";start(c)};
+  el("syncCodeIn").addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();el("syncJoin").click()}});
+  el("syncNow").onclick=sync;
+  el("syncStop").onclick=()=>{code=null;try{localStorage.removeItem(SK)}catch(_){}show()};
+  el("syncCopy").onclick=()=>{const t=pretty(code);navigator.clipboard?.writeText(t).then(()=>sst("Code copied"),()=>{getSelection().selectAllChildren(el("syncCode"))})};
+  addEventListener("online",sync);
+  document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible")sync()});
+  show(); if(code)sync();
+}
+
 /* ---------- day / night ---------- */
 const TKEY="habitgrid:theme", root=document.documentElement;
 const hostTheme=root.getAttribute("data-theme"); // the viewer may set one; "Auto" hands control back to it
@@ -596,6 +670,7 @@ if(window.__PWA){
     r.readAsText(f);
   };
   if("serviceWorker" in navigator)navigator.serviceWorker.register("sw.js").catch(()=>{});
+  setupSync();
 }
 if(window.claude&&window.claude.use){
   window.claude.use("db").then(d=>{
