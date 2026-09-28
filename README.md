@@ -9,7 +9,7 @@ Personal habit, mood and motivation tracker. Installable web app (PWA) with day/
 - Android: open the link in Chrome → menu → Install app.
 
 ## Sync across devices
-Manage habits → Sync across devices → Turn on sync. Enter the same code on any other device to share data. Keep the code private.
+Manage habits → Your account → Continue with Google. Sign in with the same Google account on any device to see the same data.
 
 ## Files
 - `index.html` — the whole app
