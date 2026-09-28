@@ -1,5 +1,17 @@
 # Habit Grid
 
-Personal habit, mood and motivation tracker. Installable web app (PWA): open https://adenitan007.github.io/habit-grid/ on your phone and add it to the home screen.
+Personal habit, mood and motivation tracker. Installable web app (PWA) with day/night views, editable habits with emoji, streaks, analysis charts, and cloud sync across devices.
 
-Data is stored on the device. Use Export backup under Manage habits to keep a copy.
+**Live app:** https://habit-gri.netlify.app/
+
+## Install on your phone
+- iPhone: open the link in Safari → Share → Add to Home Screen.
+- Android: open the link in Chrome → menu → Install app.
+
+## Sync across devices
+Manage habits → Sync across devices → Turn on sync. Enter the same code on any other device to share data. Keep the code private.
+
+## Files
+- `index.html` — the whole app
+- `sw.js` — offline support (bump `CACHE` when shipping changes)
+- `manifest.webmanifest`, `icons/` — install name and icons
